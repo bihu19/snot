@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 
 st.set_page_config(layout="wide", page_title="SNOT-22 Dashboard")
 
@@ -99,23 +100,46 @@ if not df.empty:
 
         # Slicers (ตัวกรอง)
         col1, col2, col3 = st.columns(3)
-        years = ['All'] + sorted(df['Year'].dropna().unique().astype(int).tolist())
-        selected_year = col1.selectbox("เลือกปี (Year)", years)
 
+        # Year: range slider (min-max)
+        all_years = sorted(df['Year'].dropna().unique().astype(int).tolist())
+        if len(all_years) >= 2:
+            year_range = col1.slider(
+                "เลือกช่วงปี (Year Range)",
+                min_value=all_years[0], max_value=all_years[-1],
+                value=(all_years[0], all_years[-1]),
+            )
+        elif len(all_years) == 1:
+            col1.info(f"ปีที่มีข้อมูล: {all_years[0]}")
+            year_range = (all_years[0], all_years[0])
+        else:
+            year_range = None
+
+        # Gender: single select
         genders = ['All'] + df['gender'].dropna().unique().tolist()
         selected_gender = col2.selectbox("เลือกเพศ (Gender)", genders)
 
-        ages = ['All'] + sorted(df['Age_Group'].dropna().unique().tolist())
-        selected_age = col3.selectbox("เลือกช่วงอายุ (Age Group)", ages)
+        # Age Group: multiselect
+        age_options = sorted(df['Age_Group'].dropna().unique().tolist())
+        selected_ages = col3.multiselect("เลือกช่วงอายุ (Age Group)", age_options, default=age_options)
 
         # การกรองข้อมูลตาม Slicer
         filtered_df = df.copy()
-        if selected_year != 'All':
-            filtered_df = filtered_df[filtered_df['Year'] == selected_year]
+        if year_range:
+            filtered_df = filtered_df[
+                (filtered_df['Year'] >= year_range[0]) & (filtered_df['Year'] <= year_range[1])
+            ]
         if selected_gender != 'All':
             filtered_df = filtered_df[filtered_df['gender'] == selected_gender]
-        if selected_age != 'All':
-            filtered_df = filtered_df[filtered_df['Age_Group'] == selected_age]
+        if selected_ages:
+            filtered_df = filtered_df[filtered_df['Age_Group'].isin(selected_ages)]
+
+        # แสดงจำนวนผู้ป่วยที่ตรงตามเงื่อนไข
+        if 'HN_str' in filtered_df.columns:
+            total_patients = filtered_df['HN_str'].nunique()
+        else:
+            total_patients = len(filtered_df)
+        st.metric("จำนวนผู้ป่วยทั้งหมดที่ตรงตามเงื่อนไข", f"{total_patients} คน")
 
         # ============================================================
         # ตารางค่าเฉลี่ยแต่ละเดือน (Transposed: 22 rows x 12 months)
@@ -163,11 +187,21 @@ if not df.empty:
         existing_months = plot_df.drop_duplicates('Month_Num').sort_values('Month_Num')['Month'].tolist()
 
         for topic in topics_to_plot:
-            fig = px.box(
-                plot_df, x='Month', y=topic,
+            fig = go.Figure()
+            fig.add_trace(go.Box(
+                x=plot_df['Month'],
+                y=plot_df[topic],
+                boxpoints='all',
+                pointpos=0,       # จุดอยู่ตรงกลางกล่อง
+                jitter=0.3,
+                marker=dict(color='#1f77b4', size=4, opacity=0.6),
+                line=dict(color='#1f77b4'),
+                name=topic,
+            ))
+            fig.update_layout(
                 title=f"Boxplot: {topic} — {SYMPTOM_DESCRIPTIONS.get(topic, '')}",
-                points="all", color_discrete_sequence=['#1f77b4'],
-                category_orders={'Month': existing_months},
+                xaxis=dict(categoryorder='array', categoryarray=existing_months),
+                showlegend=False,
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -178,25 +212,42 @@ if not df.empty:
         st.header("Patient Trend Analysis")
 
         hn_list = sorted(df['HN_str'].dropna().unique().tolist())
-        selected_hn = st.selectbox("เลือก HN ของคนไข้เพื่อดูแนวโน้ม", hn_list)
 
-        # ใช้ HN_str ที่แปลงแล้วเพื่อเปรียบเทียบ (แก้ปัญหา float mismatch)
-        patient_df = df[df['HN_str'] == selected_hn].sort_values('date_clean')
-
-        if not patient_df.empty:
-            melted_df = patient_df.melt(
-                id_vars=['date_clean'],
-                value_vars=SCORE_COLS,
-                var_name='Symptom_Topic',
-                value_name='Score',
-            )
-
-            fig2 = px.line(
-                melted_df, x='date_clean', y='Score', color='Symptom_Topic',
-                markers=True,
-                title=f"แนวโน้มคะแนน SNOT-22 ทั้ง 22 หัวข้อ ตลอดการรักษาของ HN: {selected_hn}",
-            )
-            fig2.update_layout(yaxis=dict(range=[0, 6]))
-            st.plotly_chart(fig2, use_container_width=True)
+        # ช่องค้นหา HN พร้อมพิมพ์กรองได้
+        search_hn = st.text_input("พิมพ์เพื่อค้นหา HN", "")
+        if search_hn:
+            filtered_hn = [h for h in hn_list if search_hn in h]
         else:
-            st.warning("ไม่พบข้อมูลสำหรับ HN นี้")
+            filtered_hn = hn_list
+
+        if filtered_hn:
+            selected_hn = st.selectbox("เลือก HN ของคนไข้เพื่อดูแนวโน้ม", filtered_hn)
+        else:
+            st.warning("ไม่พบ HN ที่ตรงกับคำค้นหา")
+            selected_hn = None
+
+        if selected_hn:
+            patient_df = df[df['HN_str'] == selected_hn].sort_values('date_clean')
+
+            if not patient_df.empty:
+                # Map ชื่อ column เป็นชื่อภาษาไทยสำหรับ legend
+                thai_labels = {col: f"{i+1}. {SYMPTOM_DESCRIPTIONS[col]}"
+                               for i, col in enumerate(SCORE_COLS)}
+
+                melted_df = patient_df.melt(
+                    id_vars=['date_clean'],
+                    value_vars=SCORE_COLS,
+                    var_name='Symptom_Topic',
+                    value_name='Score',
+                )
+                melted_df['Symptom_Topic'] = melted_df['Symptom_Topic'].map(thai_labels)
+
+                fig2 = px.line(
+                    melted_df, x='date_clean', y='Score', color='Symptom_Topic',
+                    markers=True,
+                    title=f"แนวโน้มคะแนน SNOT-22 ทั้ง 22 หัวข้อ ตลอดการรักษาของ HN: {selected_hn}",
+                )
+                fig2.update_layout(yaxis=dict(range=[0, 6]))
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.warning("ไม่พบข้อมูลสำหรับ HN นี้")
