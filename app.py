@@ -243,16 +243,15 @@ if not df.empty:
         st.dataframe(display_df, use_container_width=True)
 
         # ============================================================
-        # กราฟ Time series Boxplot (หัวข้อ 1 ถึง 7)
+        # กราฟ Time series Boxplot (หัวข้อ 1 ถึง 22)
         # ============================================================
-        st.subheader("Seasonal Trend Boxplots (หัวข้อ 1 ถึง 7)")
-        topics_to_plot = ['one', 'two', 'three', 'four', 'five', 'six', 'seven']
+        st.subheader("Seasonal Trend Boxplots (หัวข้อ 1 ถึง 22)")
         plot_df = filtered_df.dropna(subset=['Month']).sort_values('Month_Num')
 
         # Get ordered month values that exist in the data
         existing_months = plot_df.drop_duplicates('Month_Num').sort_values('Month_Num')['Month'].tolist()
 
-        for topic in topics_to_plot:
+        for idx, topic in enumerate(SCORE_COLS):
             fig = go.Figure()
             fig.add_trace(go.Box(
                 x=plot_df['Month'],
@@ -265,8 +264,9 @@ if not df.empty:
                 name=topic,
             ))
             fig.update_layout(
-                title=f"Boxplot: {topic} — {SYMPTOM_DESCRIPTIONS.get(topic, '')}",
+                title=f"Boxplot {idx+1}: {topic} — {SYMPTOM_DESCRIPTIONS.get(topic, '')}",
                 xaxis=dict(categoryorder='array', categoryarray=existing_months),
+                yaxis=dict(range=[0, 5]),
                 showlegend=False,
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -296,11 +296,43 @@ if not df.empty:
             patient_df = df[df['HN_str'] == selected_hn].sort_values('date_clean')
 
             if not patient_df.empty:
+                # --- ปุ่ม Select All / Deselect All ---
+                all_symptom_options = [
+                    f"{i+1}. {SYMPTOM_DESCRIPTIONS[col]}"
+                    for i, col in enumerate(SCORE_COLS)
+                ]
+
+                btn_col1, btn_col2, _ = st.columns([1, 1, 4])
+                with btn_col1:
+                    select_all = st.button("เลือกทั้งหมด (Select All)")
+                with btn_col2:
+                    deselect_all = st.button("ยกเลิกทั้งหมด (Deselect All)")
+
+                if select_all:
+                    st.session_state['selected_symptoms'] = all_symptom_options
+                elif deselect_all:
+                    st.session_state['selected_symptoms'] = []
+
+                default_symptoms = st.session_state.get('selected_symptoms', all_symptom_options)
+                # Ensure default values are valid options
+                default_symptoms = [s for s in default_symptoms if s in all_symptom_options]
+
+                selected_symptoms = st.multiselect(
+                    "เลือกอาการที่ต้องการแสดงในกราฟ",
+                    options=all_symptom_options,
+                    default=default_symptoms,
+                )
+                st.session_state['selected_symptoms'] = selected_symptoms
+
+                # Map selected labels back to column names
+                selected_indices = [all_symptom_options.index(s) for s in selected_symptoms]
+
                 fig2 = go.Figure()
 
-                for i, col in enumerate(SCORE_COLS):
+                for idx in selected_indices:
+                    col = SCORE_COLS[idx]
                     col_p = f"{col}_p"
-                    label = f"{i+1}. {SYMPTOM_DESCRIPTIONS[col]}"
+                    label = all_symptom_options[idx]
                     dates = patient_df['date_clean']
                     scores = patient_df[col]
 
@@ -332,7 +364,7 @@ if not df.empty:
                             ))
 
                 fig2.update_layout(
-                    title=f"แนวโน้มคะแนน SNOT-22 ทั้ง 22 หัวข้อ ตลอดการรักษาของ HN: {selected_hn}",
+                    title=f"แนวโน้มคะแนน SNOT-22 ตลอดการรักษาของ HN: {selected_hn}",
                     yaxis=dict(range=[0, 6]),
                     xaxis_title="วันที่",
                     yaxis_title="คะแนน",
